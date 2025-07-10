@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="he">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>מערכת ניהול חדרים</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <style>
+    .room-block { position: absolute; background-color: #3b82f6; border-radius: 0.5rem; color: white; padding: 0.25rem 0.5rem; cursor: move; }
+    .room-cleaning { background-color: #f97316 !important; }
+    .room-past { background-color: #9ca3af !important; }
+    .room-future { background-color: #22c55e !important; }
+    .room-error { background-color: #ef4444 !important; }
+    .booking-draft { background-color: #eab308 !important; }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4">
+
+  <div id="auth" class="flex items-center justify-center h-screen">
+    <div class="bg-white shadow p-8 rounded-lg w-full max-w-sm">
+      <h2 class="text-xl font-bold mb-4">כניסה למערכת</h2>
+      <input id="accessCode" type="password" placeholder="הזן קוד גישה" class="border p-2 w-full rounded mb-4">
+      <button onclick="submitCode()" class="bg-blue-500 hover:bg-blue-600 text-white w-full py-2 rounded">המשך</button>
+    </div>
+  </div>
+
+  <div id="mainApp" class="hidden">
+    <h1 class="text-2xl font-bold mb-4">לוח ניהול חדרים לפי שעות</h1>
+    <div class="flex gap-4">
+      <div class="w-1/4 bg-white p-4 rounded shadow">
+        <h2 class="text-lg font-semibold mb-2">טיוטות הזמנות</h2>
+        <div id="draftBookings" class="space-y-2 min-h-[400px]"></div>
+      </div>
+      <div class="flex-1">
+        <div id="roomGrid" class="relative bg-white rounded shadow overflow-x-scroll h-[600px]"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let airtableConfig = {};
+
+    async function submitCode() {
+      const code = document.getElementById('accessCode').value;
+      if (!code) return alert("יש להזין קוד.");
+      try {
+        const { status } = await axios.post("https://hook.integrator.boost.space/d94febq8bv4lh1539fd56vjxw7xgqg42", { code });
+        if (status === 200) {
+          waitForWebhookResponse();
+        } else {
+          alert("שגיאה בשליחת קוד.");
+        }
+      } catch (err) {
+        alert("שגיאה באימות הקוד: " + err.message);
+      }
+    }
+
+    async function waitForWebhookResponse() {
+      let attempts = 0;
+      const maxAttempts = 10;
+      const interval = 2000;
+      const webhookResultUrl = "https://hook.integrator.boost.space/d94febq8bv4lh1539fd56vjxw7xgqg42/response";
+
+      while (attempts < maxAttempts) {
+        try {
+          const res = await axios.get(webhookResultUrl);
+          if (res.status === 202 && res.data.apiKey && res.data.baseId) {
+            airtableConfig = res.data;
+            return handleWebhookResponse(res.data);
+          } else if (res.status === 202 && res.data.error) {
+            return alert("שגיאת קוד: " + res.data.error);
+          }
+        } catch (err) {
+          console.warn("ממתין לנתונים..." + err);
+        }
+        await new Promise(r => setTimeout(r, interval));
+        attempts++;
+      }
+      alert("השרת לא החזיר תשובה תוך זמן סביר.");
+    }
+
+    async function fetchAirtableData(apiKey, baseId, tableName) {
+      const url = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(tableName)}?pageSize=100`;
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${apiKey}` }
+      });
+      if (!response.ok) throw new Error(`שגיאה בשליפת טבלה: ${tableName}`);
+      const data = await response.json();
+      return data.records.map(r => ({ id: r.id, ...r.fields }));
+    }
+
+    async function handleWebhookResponse(data) {
+      const { apiKey, baseId, tables } = data;
+      try {
+        const [rooms, bookings, settings] = await Promise.all([
+          fetchAirtableData(apiKey, baseId, tables.rooms),
+          fetchAirtableData(apiKey, baseId, tables.bookings),
+          fetchAirtableData(apiKey, baseId, tables.settings)
+        ]);
+        document.getElementById('auth').classList.add('hidden');
+        document.getElementById('mainApp').classList.remove('hidden');
+        renderRoomGrid({ rooms, bookings, settings });
+        renderDrafts(bookings);
+      } catch (e) {
+        alert("שגיאה בטעינת נתונים: " + e.message);
+      }
+    }
+
+    // (המשך הפונקציות נשאר זהה)
+  </script>
+
+</body>
+</html>
