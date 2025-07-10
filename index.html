@@ -66,11 +66,14 @@
       while (attempts < maxAttempts) {
         try {
           const res = await axios.get(webhookResultUrl);
-          if (res.status === 202 && res.data.apiKey && res.data.baseId) {
-            airtableConfig = res.data;
-            return handleWebhookResponse(res.data);
-          } else if (res.status === 202 && res.data.error) {
-            return alert("שגיאת קוד: " + res.data.error);
+          if (res.status === 202) {
+            if (res.data.error) {
+              return alert("שגיאת קוד: " + res.data.error);
+            }
+            if (res.data.apiKey && res.data.baseId) {
+              airtableConfig = res.data;
+              return handleWebhookResponse(res.data);
+            }
           }
         } catch (err) {
           console.warn("ממתין לנתונים..." + err);
@@ -108,7 +111,118 @@
       }
     }
 
-    // (המשך הפונקציות נשאר זהה)
+    function parseDate(dateStr) {
+      return new Date(dateStr);
+    }
+
+    function minutesBetween(start, end) {
+      return (end - start) / (1000 * 60);
+    }
+
+    function calculateCleaningDuration(type, settings) {
+      const defaultDuration = settings.find(s => s["שם ההגדרה"] === "משך ניקוי ברירת מחדל")?.["ערך"] || 45;
+      const cleanRow = settings.find(s => s["שם ההגדרה"]?.includes(type));
+      return cleanRow ? Number(cleanRow["ערך"]) : Number(defaultDuration);
+    }
+
+    function getStatusColor(status) {
+      switch (status) {
+        case "פעילה": return "room-block";
+        case "עתידית": return "room-block room-future";
+        case "הסתיימה": return "room-block room-past";
+        case "שגיאה": return "room-block room-error";
+        default: return "room-block";
+      }
+    }
+
+    function createBookingBlock(booking, start, end, colorClass, label) {
+      const top = (start.getHours() * 60 + start.getMinutes()) * 1.5;
+      const height = minutesBetween(start, end) * 1.5;
+      const div = document.createElement("div");
+      div.className = colorClass;
+      div.style.top = `${top}px`;
+      div.style.height = `${height}px`;
+      div.style.left = "4px";
+      div.style.right = "4px";
+      div.innerText = label || booking["שם אורח"] || "הזמנה";
+      div.dataset.bookingId = booking.id;
+      return div;
+    }
+
+    function renderDrafts(bookings) {
+      const container = document.getElementById("draftBookings");
+      container.innerHTML = "";
+      bookings
+        .filter(b => b["טיוטה?"])
+        .forEach(booking => {
+          const div = document.createElement("div");
+          div.className = "booking-draft p-2 rounded shadow cursor-move";
+          div.innerText = booking["שם אורח"] || "הזמנה";
+          div.draggable = true;
+          div.dataset.bookingId = booking.id;
+          container.appendChild(div);
+        });
+    }
+
+    function renderRoomGrid({ rooms, bookings, settings }) {
+      const container = document.getElementById("roomGrid");
+      container.innerHTML = "";
+
+      const hourHeight = 60;
+      const hours = 24;
+      const grid = document.createElement("div");
+      grid.className = "relative w-full";
+      grid.style.minWidth = "600px";
+
+      for (let i = 0; i < hours; i++) {
+        const hourLabel = document.createElement("div");
+        hourLabel.className = "absolute left-0 text-xs text-gray-500";
+        hourLabel.style.top = `${i * hourHeight}px`;
+        hourLabel.innerText = `${i.toString().padStart(2, '0')}:00`;
+        grid.appendChild(hourLabel);
+      }
+
+      rooms.forEach((room, idx) => {
+        const roomLine = document.createElement("div");
+        roomLine.className = "border-t border-gray-300 w-full absolute left-[60px] right-0";
+        roomLine.style.top = "0px";
+        roomLine.style.height = `${hours * hourHeight}px`;
+
+        const roomLabel = document.createElement("div");
+        roomLabel.className = "absolute text-right pr-2 text-sm font-semibold text-gray-700";
+        roomLabel.style.top = `${idx * hours * hourHeight}px`;
+        roomLabel.style.height = `${hours * hourHeight}px`;
+        roomLabel.style.width = "60px";
+        roomLabel.innerText = room["שם"] || "חדר";
+
+        const roomContainer = document.createElement("div");
+        roomContainer.className = "relative border-l";
+        roomContainer.style.top = `${idx * hours * hourHeight}px`;
+        roomContainer.style.height = `${hours * hourHeight}px`;
+        roomContainer.style.marginRight = "60px";
+
+        const matchingBookings = bookings.filter(b => (b["חדר"] || []).includes(room["שם"]));
+        matchingBookings.forEach(booking => {
+          const start = parseDate(booking["שעת התחלה"]);
+          const end = parseDate(booking["שעת סיום"]);
+          const color = getStatusColor(booking["סטטוס"]);
+          const block = createBookingBlock(booking, start, end, color, booking["שם אורח"]);
+          roomContainer.appendChild(block);
+
+          const cleanMin = calculateCleaningDuration(booking["סוג ניקיון"], settings);
+          const cleanStart = end;
+          const cleanEnd = new Date(cleanStart.getTime() + cleanMin * 60000);
+          const cleanBlock = createBookingBlock(booking, cleanStart, cleanEnd, "room-block room-cleaning", "ניקוי");
+          roomContainer.appendChild(cleanBlock);
+        });
+
+        grid.appendChild(roomLabel);
+        grid.appendChild(roomContainer);
+        grid.appendChild(roomLine);
+      });
+
+      container.appendChild(grid);
+    }
   </script>
 
 </body>
